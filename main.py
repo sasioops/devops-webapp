@@ -1,85 +1,58 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from flask import Flask, jsonify, request, abort
 from datetime import datetime
 import platform
-import os
 
-app = FastAPI(
-    title="DevOps Portfolio API",
-    description="A simple Python API deployed with Docker + Nginx",
-    version="1.0.0",
-)
+app = Flask(__name__)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ── In-memory task store (swap for a real DB in production) ──────────────────
-tasks: list[dict] = [
-    {"id": 1, "title": "Set up CI/CD pipeline", "done": True},
-    {"id": 2, "title": "Dockerise the app",     "done": True},
-    {"id": 3, "title": "Deploy behind Nginx",   "done": False},
+tasks = [
+    {"id": 1, "title": "Dockerise the app", "done": True},
+    {"id": 2, "title": "Deploy behind Nginx", "done": False},
 ]
-next_id = 4
+next_id = 3
 
-
-# ── Models ────────────────────────────────────────────────────────────────────
-class TaskCreate(BaseModel):
-    title: str
-
-class TaskUpdate(BaseModel):
-    done: bool
-
-
-# ── API 1: System health / info ───────────────────────────────────────────────
-@app.get("/api/health", tags=["System"])
-def health_check():
-    """Liveness probe — returns service status and runtime info."""
-    return {
+# ── API 1: Health ─────────────────────────────────────────
+@app.get("/api/health")
+def health():
+    return jsonify({
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "time": datetime.utcnow().isoformat() + "Z",
         "host": platform.node(),
         "python": platform.python_version(),
-        "env": os.getenv("APP_ENV", "development"),
-    }
+    })
 
-
-# ── API 2: Task manager CRUD ─────────────────────────────────────────────────
-@app.get("/api/tasks", tags=["Tasks"])
+# ── API 2: Tasks ──────────────────────────────────────────
+@app.get("/api/tasks")
 def list_tasks():
-    """Return all tasks."""
-    return {"tasks": tasks, "total": len(tasks)}
+    return jsonify(tasks)
 
-
-@app.post("/api/tasks", status_code=201, tags=["Tasks"])
-def create_task(body: TaskCreate):
-    """Create a new task."""
+@app.post("/api/tasks")
+def create_task():
     global next_id
-    task = {"id": next_id, "title": body.title, "done": False}
+    body = request.get_json(silent=True) or {}
+    if not body.get("title"):
+        abort(400, "title is required")
+    task = {"id": next_id, "title": body["title"], "done": False}
     tasks.append(task)
     next_id += 1
-    return task
+    return jsonify(task), 201
 
-
-@app.patch("/api/tasks/{task_id}", tags=["Tasks"])
-def update_task(task_id: int, body: TaskUpdate):
-    """Toggle a task's done status."""
+@app.patch("/api/tasks/<int:task_id>")
+def update_task(task_id):
+    body = request.get_json(silent=True) or {}
     for task in tasks:
         if task["id"] == task_id:
-            task["done"] = body.done
-            return task
-    raise HTTPException(status_code=404, detail="Task not found")
+            task["done"] = bool(body.get("done", task["done"]))
+            return jsonify(task)
+    abort(404, "task not found")
 
-
-@app.delete("/api/tasks/{task_id}", status_code=204, tags=["Tasks"])
-def delete_task(task_id: int):
-    """Delete a task by id."""
+@app.delete("/api/tasks/<int:task_id>")
+def delete_task(task_id):
     global tasks
     before = len(tasks)
     tasks = [t for t in tasks if t["id"] != task_id]
     if len(tasks) == before:
-        raise HTTPException(status_code=404, detail="Task not found")
+        abort(404, "task not found")
+    return "", 204
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8000, debug=False)
